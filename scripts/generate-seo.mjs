@@ -23,22 +23,33 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
-import { ALL_ROUTES, getSeoForRoute } from "../src/config/seo.js";
+import {
+  ALL_ROUTES,
+  HOST_GROUPS,
+  getSeoForRoute,
+  sitemapEntriesForHost,
+} from "../src/config/seo.js";
 
 const DIST = new URL("../dist/", import.meta.url);
 const VERCEL_JSON = new URL("../vercel.json", import.meta.url);
 const SYNC = process.argv.includes("--sync");
 
 /**
- * Grupos de host. Los hostnames van EXACTOS al "has.value" de vercel.json, no
- * como regex: si un patron no calzara, credex.cl serviria el canonical de
- * credexapp.com, que es exactamente el bug que este PR existe para arreglar.
+ * Grupos de host: viven en src/config/seo.js, que es donde tambien los lee
+ * generate-sitemap.mjs. Los hostnames van EXACTOS al "has.value" de vercel.json,
+ * no como regex: si un patron no calzara, credex.cl serviria el canonical de
+ * credexapp.com, que es exactamente el bug que este script existe para evitar.
  * Prefiero tres reglas por ruta y cero ambiguedad.
  */
-const HOSTS = [
-  { grupo: "cl", hostname: "www.credex.cl", hosts: ["www.credex.cl", "ww2.credex.cl"] },
-  { grupo: "app", hostname: "www.credexapp.com", hosts: null }, // fallback sin "has"
-];
+const HOSTS = HOST_GROUPS;
+
+/**
+ * Archivos que tambien tienen una variante por host, fuera del router de React.
+ * Mismo motivo que el <head>: un solo sitemap servido en los dos dominios le
+ * declaraba a credexapp.com quince URLs de credex.cl. Los escribe
+ * generate-sitemap.mjs en public/_h/<grupo>/; aca solo se enrutan y se verifican.
+ */
+const ARCHIVOS_POR_HOST = ["/sitemap.xml", "/robots.txt"];
 
 const esc = (v) =>
   String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -102,6 +113,60 @@ function verificarCoberturaDelRouter() {
   }
 }
 
+/**
+ * Mismo criterio que el guard del router, aplicado a los sitemaps: que lo que
+ * dist va a servir en cada host sea exactamente lo que dice src/config/seo.js.
+ *
+ * Sin esto, un sitemap quedaria desactualizado en silencio —basta que alguien
+ * cambie un canonical y no vuelva a correr generate-sitemap.mjs, o que se cuele
+ * de nuevo un public/sitemap.xml en la raiz— y el sintoma solo aparece semanas
+ * despues, en Search Console.
+ */
+function verificarSitemaps() {
+  for (const { grupo, hostname } of HOSTS) {
+    for (const archivo of ARCHIVOS_POR_HOST) {
+      const ruta = new URL(`./_h/${grupo}${archivo}`, DIST);
+      let contenido;
+      try {
+        contenido = readFileSync(ruta, "utf8");
+      } catch {
+        throw new Error(
+          `Falta dist/_h/${grupo}${archivo}. Lo escribe scripts/generate-sitemap.mjs ` +
+            "en public/, antes de vite build:  npm run generate:sitemap",
+        );
+      }
+      if (archivo === "/robots.txt") continue;
+
+      const declaradas = [...contenido.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+      const esperadas = sitemapEntriesForHost(hostname).map((e) => e.loc);
+
+      if (JSON.stringify(declaradas) !== JSON.stringify(esperadas)) {
+        throw new Error(
+          `El sitemap de ${hostname} no calza con src/config/seo.js.\n` +
+            `  declara: ${declaradas.join(", ") || "(nada)"}\n` +
+            `  deberia: ${esperadas.join(", ")}\n` +
+            "Regenerar con:  npm run generate:sitemap",
+        );
+      }
+    }
+  }
+
+  // Un archivo en la raiz de dist gana sobre el rewrite: Vercel consulta el
+  // sistema de archivos primero y volveriamos a servir el mismo sitemap en los
+  // dos dominios, que es el bug que esto arregla.
+  for (const archivo of ARCHIVOS_POR_HOST) {
+    try {
+      readFileSync(new URL(`.${archivo}`, DIST));
+    } catch {
+      continue;
+    }
+    throw new Error(
+      `dist${archivo} existe y le gana al rewrite por host: los dos dominios ` +
+        `volverian a servir el mismo archivo. Borrar public${archivo}.`,
+    );
+  }
+}
+
 function generarArchivos() {
   const base = readFileSync(new URL("index.html", DIST), "utf8");
   for (const prohibida of ['rel="canonical"', 'name="description"', 'property="og:title"']) {
@@ -153,6 +218,20 @@ function rewritesEsperados() {
       }
     }
   }
+
+  for (const archivo of ARCHIVOS_POR_HOST) {
+    for (const { grupo, hosts } of HOSTS) {
+      const destination = `/_h/${grupo}${archivo}`;
+      if (!hosts) {
+        reglas.push({ source: archivo, destination });
+        continue;
+      }
+      for (const host of hosts) {
+        reglas.push({ source: archivo, has: [{ type: "host", value: host }], destination });
+      }
+    }
+  }
+
   return reglas;
 }
 
@@ -188,4 +267,5 @@ if (!SYNC) {
   verificarCoberturaDelRouter();
   const n = generarArchivos();
   console.log(`SEO prerenderizado: ${n} variantes (${HOSTS.length} hosts x ${ALL_ROUTES.length} rutas)`);
+  verificarSitemaps();
 }

@@ -659,6 +659,54 @@
     {
       "source": "/gracias",
       "destination": "/_h/app/gracias.html"
+    },
+    {
+      "source": "/sitemap.xml",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.credex.cl"
+        }
+      ],
+      "destination": "/_h/cl/sitemap.xml"
+    },
+    {
+      "source": "/sitemap.xml",
+      "has": [
+        {
+          "type": "host",
+          "value": "ww2.credex.cl"
+        }
+      ],
+      "destination": "/_h/cl/sitemap.xml"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "/_h/app/sitemap.xml"
+    },
+    {
+      "source": "/robots.txt",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.credex.cl"
+        }
+      ],
+      "destination": "/_h/cl/robots.txt"
+    },
+    {
+      "source": "/robots.txt",
+      "has": [
+        {
+          "type": "host",
+          "value": "ww2.credex.cl"
+        }
+      ],
+      "destination": "/_h/cl/robots.txt"
+    },
+    {
+      "source": "/robots.txt",
+      "destination": "/_h/app/robots.txt"
     }
   ]
 }

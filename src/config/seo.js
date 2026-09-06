@@ -31,6 +31,28 @@ export function isChileHost(hostname = "") {
 }
 
 /**
+ * Grupos de host que sirve este deployment, con el sitio que le corresponde a
+ * cada uno.
+ *
+ * Lo consumen los dos scripts de build: generate-seo.mjs prerenderiza el <head>
+ * por (host, ruta) y generate-sitemap.mjs escribe un sitemap.xml y un robots.txt
+ * por host. Vive aca para que no existan dos listas de hosts que puedan
+ * desalinearse entre si.
+ *
+ * "hosts: null" marca el grupo de respaldo: su regla en vercel.json va SIN "has"
+ * y atiende todo lo que no calzo con un host anterior.
+ */
+export const HOST_GROUPS = [
+  {
+    grupo: "cl",
+    hostname: "www.credex.cl",
+    site: SITE_CL,
+    hosts: ["www.credex.cl", "ww2.credex.cl"],
+  },
+  { grupo: "app", hostname: "www.credexapp.com", site: SITE_APP, hosts: null },
+];
+
+/**
  * Cluster hreflang. Reciproco: cada una de estas paginas declara a TODAS,
  * incluida a si misma. Un hreflang que no es reciproco Google lo ignora entero.
  *
@@ -253,4 +275,31 @@ export function getSeoForRoute(route, hostname = "") {
     hreflang: emiteHreflang ? HREFLANG : [],
     noindex: false,
   };
+}
+
+/**
+ * URLs que un host declara en SU sitemap.
+ *
+ * NO hay una segunda lista de rutas: se filtra ALL_ROUTES con el mismo
+ * getSeoForRoute() que usan React y el prerender. Entra la ruta que cumple las
+ * dos condiciones que le exige un sitemap, y solo esas:
+ *
+ *   · es indexable. Deja fuera /gracias, que va con noindex.
+ *   · es su propio canonical EN ESTE HOST. Un sitemap no declara URLs cuyo
+ *     canonical apunta a otra parte: es contradecirse. Sin nombrarlas una por
+ *     una, eso excluye
+ *       - /cl y las rutas de contenido en credexapp.com, que canonicalizan a
+ *         credex.cl y por eso pertenecen al sitemap del otro dominio;
+ *       - /pe, /co y /ar servidas desde credex.cl, donde manda el host y el
+ *         canonical apunta al home chileno.
+ *
+ * El dia que una ruta cambie de canonical, su sitemap la sigue solo.
+ */
+export function sitemapEntriesForHost(hostname = "") {
+  const base = isChileHost(hostname) ? SITE_CL : SITE_APP;
+
+  return ALL_ROUTES.filter((ruta) => {
+    const seo = getSeoForRoute(ruta, hostname);
+    return !seo.noindex && seo.canonical === `${base}${ruta}`;
+  }).map((ruta) => ({ ruta, loc: `${base}${ruta}` }));
 }

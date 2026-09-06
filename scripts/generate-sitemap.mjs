@@ -1,22 +1,29 @@
 /**
- * Genera public/sitemap.xml leyendo las rutas declaradas en src/main.jsx.
+ * Genera un sitemap.xml y un robots.txt POR HOST, en public/_h/<grupo>/.
  *
- * Motivo: el sitemap anterior estaba escrito a mano y no coincidia con el
- * router (declaraba 9 URLs, omitia /blog y sus 5 articulos). Al derivarlo del
- * router, ambos no pueden volver a divergir.
+ * POR QUE POR HOST. El mismo deployment sirve credex.cl y credexapp.com. Con un
+ * solo archivo, verificado en produccion el 2026-09-02:
+ *     credexapp.com/sitemap.xml  ->  15 URLs, TODAS de credex.cl
+ *     credexapp.com/robots.txt   ->  Sitemap: https://www.credex.cl/sitemap.xml
+ * Es decir: las cuatro paginas internacionales (/, /pe, /co, /ar), que son las
+ * que declaran su propio canonical y el hreflang, no estaban en ningun sitemap,
+ * y el dominio internacional le entregaba a Google el mapa del otro dominio.
  *
- * Ambito: solo www.credex.cl. Las rutas de mercado (/pe, /co, /ar) pertenecen
- * a credexapp.com y quedan fuera hasta que se resuelva que dominio es canonico
- * para cada mercado (decision D01 del proyecto de marketing).
+ * vercel.json enruta /sitemap.xml y /robots.txt a la variante de cada host con
+ * "has": [{"type":"host"}], la misma tecnica que ya usa el prerender del <head>.
+ * Por eso no puede existir public/sitemap.xml ni public/robots.txt en la raiz:
+ * Vercel consulta el sistema de archivos ANTES que los rewrites y volveria a
+ * servir el mismo archivo en los dos dominios.
+ *
+ * FUENTE UNICA DE VERDAD: src/config/seo.js. Las URLs salen de
+ * sitemapEntriesForHost(), que filtra las rutas por su canonical real en ese
+ * host. No hay una segunda lista de rutas que se pueda desincronizar; el guard
+ * de generate-seo.mjs revisa ademas que lo escrito aca siga calzando.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
-const ORIGIN = "https://www.credex.cl";
-
-// Rutas que no van al sitemap de credex.cl.
-// /gracias ademas va con noindex: es una confirmacion de envio, no una pagina
-// que alguien deba encontrar en el buscador.
-const EXCLUIDAS = new Set(["*", "/cl", "/pe", "/co", "/ar", "/gracias"]);
+import { HOST_GROUPS, sitemapEntriesForHost } from "../src/config/seo.js";
 
 const prioridad = (ruta) => {
   if (ruta === "/") return "1.0";
@@ -26,26 +33,39 @@ const prioridad = (ruta) => {
   return "0.9";
 };
 
-const router = readFileSync(new URL("../src/main.jsx", import.meta.url), "utf8");
-const rutas = [...router.matchAll(/path="([^"]+)"/g)]
-  .map((m) => m[1])
-  .filter((r) => !EXCLUIDAS.has(r));
+const sitemapXml = (entradas) =>
+  [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...entradas.map(
+      ({ ruta, loc }) =>
+        `  <url>\n    <loc>${loc}</loc>\n` +
+        `    <priority>${prioridad(ruta)}</priority>\n  </url>`,
+    ),
+    "</urlset>",
+    "",
+  ].join("\n");
 
-if (rutas.length === 0) {
-  throw new Error("No se encontraron rutas en src/main.jsx: revisar el parser.");
+const robotsTxt = (site) =>
+  ["User-agent: *", "Allow: /", "", `Sitemap: ${site}/sitemap.xml`, ""].join("\n");
+
+function escribir(grupo, nombre, contenido) {
+  const destino = new URL(`../public/_h/${grupo}/${nombre}`, import.meta.url);
+  mkdirSync(dirname(destino.pathname), { recursive: true });
+  writeFileSync(destino, contenido);
 }
 
-const xml = [
-  '<?xml version="1.0" encoding="UTF-8"?>',
-  '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-  ...rutas.map(
-    (r) =>
-      `  <url>\n    <loc>${ORIGIN}${r === "/" ? "/" : r}</loc>\n` +
-      `    <priority>${prioridad(r)}</priority>\n  </url>`,
-  ),
-  "</urlset>",
-  "",
-].join("\n");
+for (const { grupo, hostname, site } of HOST_GROUPS) {
+  const entradas = sitemapEntriesForHost(hostname);
 
-writeFileSync(new URL("../public/sitemap.xml", import.meta.url), xml);
-console.log(`sitemap.xml generado desde el router: ${rutas.length} URLs`);
+  if (entradas.length === 0) {
+    throw new Error(
+      `El sitemap de ${hostname} quedaria vacio: revisar src/config/seo.js.`,
+    );
+  }
+
+  escribir(grupo, "sitemap.xml", sitemapXml(entradas));
+  escribir(grupo, "robots.txt", robotsTxt(site));
+
+  console.log(`sitemap ${hostname}: ${entradas.length} URLs -> public/_h/${grupo}/`);
+}
